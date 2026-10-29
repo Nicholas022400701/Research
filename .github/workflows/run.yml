@@ -1,0 +1,91 @@
+name: run
+on:
+  workflow_dispatch:
+    inputs:
+      job:
+        required: true
+        type: string
+      shards:
+        required: false
+        default: "1"
+        type: string
+      hop:
+        required: false
+        default: "0"
+        type: string
+      maxhop:
+        required: false
+        default: "30"
+        type: string
+      budget:
+        required: false
+        default: "320"
+        type: string
+permissions:
+  contents: read
+  actions: write
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    outputs:
+      m: ${{ steps.m.outputs.m }}
+    steps:
+      - id: m
+        run: python3 -c "import json;print('m='+json.dumps(list(range(int('${{ inputs.shards }}')))))" >> "$GITHUB_OUTPUT"
+  run:
+    needs: plan
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+    strategy:
+      fail-fast: false
+      max-parallel: 40
+      matrix:
+        s: ${{ fromJson(needs.plan.outputs.m) }}
+    env:
+      RKEY: ${{ secrets.RKEY }}
+      VT: ${{ secrets.VAULT_TOKEN }}
+      JOB: ${{ inputs.job }}
+      HOP: ${{ inputs.hop }}
+      S: ${{ matrix.s }}
+      N: ${{ inputs.shards }}
+      BUDGET: ${{ inputs.budget }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: bash .github/run.sh > /dev/null 2>&1 || true
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: o-${{ inputs.job }}-${{ matrix.s }}-${{ inputs.hop }}
+          path: out.enc
+          if-no-files-found: ignore
+          retention-days: 5
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: c-${{ matrix.s }}
+          path: c.txt
+          if-no-files-found: ignore
+          retention-days: 1
+  renew:
+    needs: run
+    if: always()
+    runs-on: ubuntu-latest
+    env:
+      GH: ${{ github.token }}
+      JOB: ${{ inputs.job }}
+      HOP: ${{ inputs.hop }}
+      N: ${{ inputs.shards }}
+      MAXHOP: ${{ inputs.maxhop }}
+      BUDGET: ${{ inputs.budget }}
+      REPO: ${{ github.repository }}
+      REF: ${{ github.ref_name }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: c-*
+          path: cc
+      - run: bash .github/renew.sh > /dev/null 2>&1 || true
